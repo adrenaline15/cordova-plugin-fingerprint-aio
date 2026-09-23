@@ -142,4 +142,34 @@ exports.defineManualTests = function (contentEl, createActionButton) {
       alert("Error while loading secret: " + JSON.stringify(err));
     }
   });
+
+  createActionButton("Load secret twice (concurrent)", function () {
+    var results = [];
+
+    // Android: expect the first call to return the secret and the second -114.
+    Fingerprint.loadBiometricSecret({ disableBackup: true }, report("first: secret"), report("first: error"));
+    Fingerprint.loadBiometricSecret({ disableBackup: true }, report("second: secret"), report("second: error"));
+
+    function report(label) {
+      return function (result) {
+        results.push(label + " -> " + JSON.stringify(result));
+        alert(results.join("\n"));
+      };
+    }
+  });
+
+  createActionButton("isAvailable during a prompt", function () {
+    // Android, issue #470: isAvailable must answer without taking over the pending prompt.
+    Fingerprint.loadBiometricSecret({ disableBackup: true }, function (secret) {
+      alert("Secret loaded successfully: " + secret);
+    }, function (err) {
+      alert("Error while loading secret: " + JSON.stringify(err));
+    });
+
+    Fingerprint.isAvailable(function (result) {
+      alert("isAvailable while prompt showing: " + result);
+    }, function (err) {
+      alert("isAvailable failed while prompt showing: " + JSON.stringify(err));
+    });
+  });
 };

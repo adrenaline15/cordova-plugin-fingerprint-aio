@@ -18,6 +18,7 @@ Fingerprint.prototype.BIOMETRIC_SCREEN_GUARD_UNSECURED = -110;
 Fingerprint.prototype.BIOMETRIC_LOCKED_OUT = -111;
 Fingerprint.prototype.BIOMETRIC_LOCKED_OUT_PERMANENT = -112;
 Fingerprint.prototype.BIOMETRIC_NO_SECRET_FOUND = -113;
+Fingerprint.prototype.BIOMETRIC_ALREADY_IN_PROGRESS = -114;
 
 // Biometric types
 Fingerprint.prototype.BIOMETRIC_TYPE_FINGERPRINT = "finger";

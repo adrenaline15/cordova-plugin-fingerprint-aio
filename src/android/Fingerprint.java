@@ -20,12 +20,21 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.util.concurrent.atomic.AtomicReference;
+
 public class Fingerprint extends CordovaPlugin {
 
     private static final String TAG = "Fingerprint";
     private static final int REQUEST_CODE_BIOMETRIC = 1;
 
     private CallbackContext mCallbackContext = null;
+
+    // Activity-based actions resolve later, in onActivityResult, so they need a callback that a
+    // subsequent execute() cannot overwrite. A second prompt is rejected rather than superseding
+    // the pending one, so a result can never reach a caller that did not ask for it. See #470.
+    private final AtomicReference<CallbackContext> mBiometricActivityCallbackContext =
+            new AtomicReference<>(null);
+
     private PromptInfo.Builder mPromptInfoBuilder;
 
     public void initialize(CordovaInterface cordova, CordovaWebView webView) {
@@ -65,17 +74,17 @@ public class Fingerprint extends CordovaPlugin {
         boolean requireStrongBiometrics = new Args(args).getBoolean("requireStrongBiometrics", false);
         PluginError error = canAuthenticate(requireStrongBiometrics);
         if (error != null) {
-            sendError(error);
+            sendError(this.mCallbackContext, error);
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P){
-            sendSuccess("biometric");
+            sendSuccess(this.mCallbackContext, "biometric");
         } else {
-            sendSuccess("finger");
+            sendSuccess(this.mCallbackContext, "finger");
         }
     }
     private void executeRegisterBiometricSecret(JSONArray args) {
         // should at least contains the secret
         if (args == null) {
-            sendError(PluginError.BIOMETRIC_ARGS_PARSING_FAILED);
+            sendError(this.mCallbackContext, PluginError.BIOMETRIC_ARGS_PARSING_FAILED);
             return;
         }
         this.runBiometricActivity(args, BiometricActivityType.REGISTER_SECRET);
@@ -97,9 +106,17 @@ public class Fingerprint extends CordovaPlugin {
         boolean requireStrongBiometrics = determineStrongBiometricsRequired(type);
         PluginError error = canAuthenticate(requireStrongBiometrics);
         if (error != null) {
-            sendError(error);
+            sendError(this.mCallbackContext, error);
             return;
         }
+
+        final CallbackContext callbackContext = this.mCallbackContext;
+        if (!this.mBiometricActivityCallbackContext.compareAndSet(null, callbackContext)) {
+            Log.w(TAG, "Rejecting " + type + ": a biometric prompt is already in progress.");
+            sendError(callbackContext, PluginError.BIOMETRIC_ALREADY_IN_PROGRESS);
+            return;
+        }
+
         cordova.getActivity().runOnUiThread(() -> {
             mPromptInfoBuilder.parseArgs(args, type);
             Intent intent = new Intent(cordova.getActivity().getApplicationContext(), BiometricActivity.class);
@@ -108,7 +125,7 @@ public class Fingerprint extends CordovaPlugin {
         });
         PluginResult pluginResult = new PluginResult(PluginResult.Status.NO_RESULT);
         pluginResult.setKeepCallback(true);
-        this.mCallbackContext.sendPluginResult(pluginResult);
+        callbackContext.sendPluginResult(pluginResult);
     }
 
     @Override
@@ -117,27 +134,41 @@ public class Fingerprint extends CordovaPlugin {
         if (requestCode != REQUEST_CODE_BIOMETRIC) {
             return;
         }
-        if (resultCode != Activity.RESULT_OK) {
-            sendError(intent);
+
+        CallbackContext callbackContext = this.mBiometricActivityCallbackContext.getAndSet(null);
+        if (callbackContext == null) {
+            Log.e(TAG, "Biometric activity returned but no callback context is pending. Result dropped.");
             return;
         }
-        sendSuccess(intent);
+
+        if (resultCode != Activity.RESULT_OK) {
+            sendError(callbackContext, intent);
+            return;
+        }
+        sendSuccess(callbackContext, intent);
     }
 
-    private void sendSuccess(Intent intent) {
+    // A reload destroys every outstanding JS callback, so release the slot or later prompts would
+    // all be rejected. The abandoned callback is not settled: the JS side that owned it is gone.
+    @Override
+    public void onReset() {
+        this.mBiometricActivityCallbackContext.set(null);
+    }
+
+    private void sendSuccess(CallbackContext callbackContext, Intent intent) {
         if (intent != null && intent.getExtras() != null) {
-            sendSuccess(intent.getExtras().getString(PromptInfo.SECRET_EXTRA));
+            sendSuccess(callbackContext, intent.getExtras().getString(PromptInfo.SECRET_EXTRA));
         } else {
-            sendSuccess("biometric_success");
+            sendSuccess(callbackContext, "biometric_success");
         }
     }
 
-    private void sendError(Intent intent) {
+    private void sendError(CallbackContext callbackContext, Intent intent) {
         if (intent != null) {
             Bundle extras = intent.getExtras();
-            sendError(extras.getInt("code"), extras.getString("message"));
+            sendError(callbackContext, extras.getInt("code"), extras.getString("message"));
         } else {
-            sendError(PluginError.BIOMETRIC_DISMISSED);
+            sendError(callbackContext, PluginError.BIOMETRIC_DISMISSED);
         }
     }
 
@@ -155,7 +186,7 @@ public class Fingerprint extends CordovaPlugin {
         }
     }
 
-    private void sendError(int code, String message) {
+    private void sendError(CallbackContext callbackContext, int code, String message) {
         JSONObject resultJson = new JSONObject();
         try {
             resultJson.put("code", code);
@@ -164,9 +195,9 @@ public class Fingerprint extends CordovaPlugin {
             PluginResult result = new PluginResult(PluginResult.Status.ERROR, resultJson);
             result.setKeepCallback(true);
             if (cordova.getActivity() != null) {
-                if(Fingerprint.this.mCallbackContext != null){
+                if(callbackContext != null){
                     cordova.getActivity().runOnUiThread(() ->
-                            Fingerprint.this.mCallbackContext.sendPluginResult(result));
+                            callbackContext.sendPluginResult(result));
                 }
                 else{
                     Log.e(TAG, code + ":" + message);
@@ -179,13 +210,13 @@ public class Fingerprint extends CordovaPlugin {
         }
     }
 
-    private void sendError(PluginError error) {
-        sendError(error.getValue(), error.getMessage());
+    private void sendError(CallbackContext callbackContext, PluginError error) {
+        sendError(callbackContext, error.getValue(), error.getMessage());
     }
 
-    private void sendSuccess(String message) {
+    private void sendSuccess(CallbackContext callbackContext, String message) {
         cordova.getActivity().runOnUiThread(() ->
-                this.mCallbackContext.success(message));
+                callbackContext.success(message));
     }
 
     private String getApplicationLabel(Context context) {

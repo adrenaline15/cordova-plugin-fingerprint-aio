@@ -13,6 +13,7 @@ public enum PluginError {
     BIOMETRIC_LOCKED_OUT(-111),
     BIOMETRIC_LOCKED_OUT_PERMANENT(-112),
     BIOMETRIC_NO_SECRET_FOUND(-113),
+    BIOMETRIC_ALREADY_IN_PROGRESS(-114, "A biometric prompt is already in progress"),
     BIOMETRIC_ARGS_PARSING_FAILED(-115);
 
     private int value;
